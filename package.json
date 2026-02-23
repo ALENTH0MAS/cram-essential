@@ -1,0 +1,238 @@
+{
+  "name": "cram-essential",
+  "displayName": "CRAM ESSENTIAL",
+  "description": "A Software Development Building Companions — Orchestrate Claude, GPT-4, Gemini and any AI model as a full development team with planning meetings, SDLC pipeline, and real-time collaboration",
+  "version": "1.0.1",
+  "publisher": "AlenThomas",
+  "icon": "resources/cram-icon.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ALENTH0MAS/cram-essential"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Snippets",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "copilot",
+    "chatgpt",
+    "claude",
+    "gemini"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cramEssential.startProject",
+        "title": "CRAM ESSENTIAL: Start Company Project",
+        "icon": "$(play)"
+      },
+      {
+        "command": "cramEssential.stopProject",
+        "title": "CRAM ESSENTIAL: Stop Project",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "cramEssential.openDashboard",
+        "title": "CRAM ESSENTIAL: Open Dashboard"
+      },
+      {
+        "command": "cramEssential.startMeeting",
+        "title": "CRAM ESSENTIAL: Start Meeting"
+      },
+      {
+        "command": "cramEssential.setStrategy",
+        "title": "CRAM ESSENTIAL: Set Orchestration Strategy"
+      },
+      {
+        "command": "cramEssential.assignRoles",
+        "title": "CRAM ESSENTIAL: Assign Company Roles"
+      },
+      {
+        "command": "cramEssential.viewDecisions",
+        "title": "CRAM ESSENTIAL: View Decision Log"
+      },
+      {
+        "command": "cramEssential.exportSession",
+        "title": "CRAM ESSENTIAL: Export Session"
+      },
+      {
+        "command": "cramEssential.welcome",
+        "title": "CRAM ESSENTIAL: Welcome"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cram-essential",
+          "title": "CRAM ESSENTIAL",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "cram-essential": [
+        {
+          "type": "webview",
+          "id": "cramEssential.sidebar",
+          "name": "CRAM ESSENTIAL"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CRAM ESSENTIAL",
+      "properties": {
+        "cramEssential.claude.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic API key for Claude",
+          "scope": "application"
+        },
+        "cramEssential.claude.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-20250514",
+          "description": "Claude model ID"
+        },
+        "cramEssential.gpt.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key for GPT-4",
+          "scope": "application"
+        },
+        "cramEssential.gpt.model": {
+          "type": "string",
+          "default": "gpt-4-turbo",
+          "description": "GPT model ID"
+        },
+        "cramEssential.gemini.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Google AI API key for Gemini",
+          "scope": "application"
+        },
+        "cramEssential.gemini.model": {
+          "type": "string",
+          "default": "gemini-1.5-pro",
+          "description": "Gemini model ID"
+        },
+        "cramEssential.customProviders": {
+          "type": "array",
+          "default": [],
+          "description": "Custom AI providers (OpenAI-compatible APIs). Note: API keys in this array are stored in plain text in VS Code settings.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Unique provider name"
+              },
+              "displayName": {
+                "type": "string",
+                "description": "Display name in UI"
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "API base URL"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API key (stored in plain text in settings; leave empty for local providers)"
+              },
+              "model": {
+                "type": "string",
+                "description": "Model ID"
+              },
+              "maxTokens": {
+                "type": "number",
+                "default": 4096
+              }
+            },
+            "required": [
+              "name",
+              "baseUrl",
+              "model"
+            ]
+          }
+        },
+        "cramEssential.defaultStrategy": {
+          "type": "string",
+          "enum": [
+            "collaborative",
+            "sequential",
+            "parallel",
+            "competitive"
+          ],
+          "default": "collaborative",
+          "description": "Default orchestration strategy"
+        },
+        "cramEssential.outputDir": {
+          "type": "string",
+          "default": ".cram-essential",
+          "description": "Output directory for conversations, code, and reports"
+        },
+        "cramEssential.maxTokensPerRequest": {
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum tokens per AI request"
+        },
+        "cramEssential.timeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "description": "Timeout per AI request in milliseconds"
+        },
+        "cramEssential.meetingMaxTurns": {
+          "type": "number",
+          "default": 8,
+          "description": "Maximum conversation turns per meeting"
+        },
+        "cramEssential.logLevel": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "default": "info",
+          "description": "Logging verbosity"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "openai": "^4.60.0",
+    "@google/generative-ai": "^0.21.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^9.0.0",
+    "typescript": "^5.3.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.50.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

@@ -1,0 +1,14 @@
+﻿.vscode/**
+.vscode-test/**
+src/**
+.eslintrc.json
+tsconfig.json
+node_modules/**
+.cram-essential/**
+*.vsix
+.github/**
+CHANGELOG.md
+GPT4-IMPLEMENTATION-PROMPT.md
+GEMINI-REVIEW-PROMPT.md
+cramlogo.PNG
+*.PNG
