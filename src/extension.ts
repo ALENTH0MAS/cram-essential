@@ -1,8 +1,6 @@
-﻿import * as vscode from 'vscode';
-import { Orchestrator } from './orchestrator/Orchestrator';
+import * as vscode from 'vscode';
 import { SidebarPanel } from './ui/SidebarPanel';
 import { WelcomePanel } from './ui/WelcomePanel';
-import { FileManager } from './utils/fileManager';
 import { handleError } from './utils/errorHandler';
 import { Logger } from './utils/logger';
 import { readConfig, watchConfig } from './utils/configReader';
@@ -20,27 +18,90 @@ export function activate(context: vscode.ExtensionContext): void {
     const config = readConfig();
     logger.setLevel(config.logLevel);
 
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+    // --- Lazy Orchestrator: heavy AI SDKs only loaded on first command use ---
+    let _orchestrator: import('./orchestrator/Orchestrator').Orchestrator | undefined;
+    let _orchestratorPromise: Promise<import('./orchestrator/Orchestrator').Orchestrator> | undefined;
+
+    function getOrchestrator(): Promise<import('./orchestrator/Orchestrator').Orchestrator> {
+        if (_orchestrator) {
+            return Promise.resolve(_orchestrator);
+        }
+        if (_orchestratorPromise) {
+            return _orchestratorPromise;
+        }
+        _orchestratorPromise = import('./orchestrator/Orchestrator').then((mod) => {
+            _orchestrator = new mod.Orchestrator(readConfig());
+
+            // Wire up file persistence events
+            _orchestrator.onEvent(async (event) => {
+                try {
+                    if (event.type === 'meeting:completed') {
+                        const result = event.data['result'] as MeetingResult | undefined;
+                        if (result) {
+                            const fm = await getFileManager();
+                            await fm.saveMeeting(result);
+                        }
+                    }
+                    if (event.type === 'file:generated') {
+                        const file = event.data['file'] as GeneratedFile | undefined;
+                        if (file) {
+                            const fm = await getFileManager();
+                            await fm.saveGeneratedFile(file);
+                        }
+                    }
+                } catch (err) {
+                    logger.error('Failed to save file', err instanceof Error ? err : undefined);
+                }
+            });
+
+            // Wire sidebar to orchestrator events
+            sidebarPanel.attachOrchestrator(_orchestrator);
+
+            context.subscriptions.push(_orchestrator);
+            logger.info('Orchestrator initialized');
+            return _orchestrator;
+        });
+        return _orchestratorPromise;
+    }
+
+    // --- Lazy FileManager: only created when saving files ---
+    let _fileManager: import('./utils/fileManager').FileManager | undefined;
+    let _fileManagerPromise: Promise<import('./utils/fileManager').FileManager> | undefined;
+
+    function getFileManager(): Promise<import('./utils/fileManager').FileManager> {
+        if (_fileManager) {
+            return Promise.resolve(_fileManager);
+        }
+        if (_fileManagerPromise) {
+            return _fileManagerPromise;
+        }
+        if (!workspaceRoot) {
+            return Promise.reject(new Error('No workspace folder open'));
+        }
+        _fileManagerPromise = import('./utils/fileManager').then(async (mod) => {
+            _fileManager = new mod.FileManager(workspaceRoot, readConfig().outputDir);
+            await _fileManager.initialize();
+            return _fileManager;
+        });
+        return _fileManagerPromise;
+    }
+
+    // Warn about plaintext keys (lightweight check, no heavy imports)
     if (config.customProviders.some((provider) => provider.apiKey.trim().length > 0)) {
         void vscode.window.showWarningMessage(
             'CRAM ESSENTIAL: API keys inside "cramEssential.customProviders" are stored in plain text in settings.'
         );
     }
 
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!workspaceRoot) {
         vscode.window.showWarningMessage('CRAM ESSENTIAL requires an open workspace folder.');
         return;
     }
 
-    const fileManager = new FileManager(workspaceRoot, config.outputDir);
-    fileManager.initialize().catch((err) =>
-        logger.error('Failed to initialize file manager', err instanceof Error ? err : undefined)
-    );
-
-    const orchestrator = new Orchestrator(config);
-
-    // Register WebView sidebar
-    const sidebarPanel = new SidebarPanel(context.extensionUri, orchestrator, context);
+    // Register WebView sidebar (lightweight — no orchestrator created yet)
+    const sidebarPanel = new SidebarPanel(context.extensionUri, context);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('cramEssential.sidebar', sidebarPanel)
     );
@@ -92,6 +153,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
 
             try {
+                const orchestrator = await getOrchestrator();
                 orchestrator.startSession(name, strategyPick.value as OrchestrationStrategy);
 
                 await vscode.window.withProgress(
@@ -110,6 +172,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
                         try {
                             const result = await orchestrator.runProject(name, description);
+                            const fileManager = await getFileManager();
                             await fileManager.savePipeline(result);
 
                             void vscode.window.showInformationMessage(
@@ -122,7 +185,7 @@ export function activate(context: vscode.ExtensionContext): void {
                                 if (action === 'View Report') {
                                     const reportPath = vscode.Uri.joinPath(
                                         vscode.Uri.file(workspaceRoot),
-                                        config.outputDir, 'reports', `${result.id}-report.md`
+                                        readConfig().outputDir, 'reports', `${result.id}-report.md`
                                     );
                                     void vscode.workspace.openTextDocument(reportPath).then(
                                         (doc) => vscode.window.showTextDocument(doc)
@@ -141,7 +204,8 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('cramEssential.stopProject', () => {
+        vscode.commands.registerCommand('cramEssential.stopProject', async () => {
+            const orchestrator = await getOrchestrator();
             orchestrator.stopSession();
             void vscode.window.showInformationMessage('CRAM ESSENTIAL: Project stopped.');
         })
@@ -178,6 +242,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
 
             try {
+                const orchestrator = await getOrchestrator();
                 await vscode.window.withProgress(
                     {
                         location: vscode.ProgressLocation.Notification,
@@ -202,9 +267,10 @@ export function activate(context: vscode.ExtensionContext): void {
                                 type: typePick.value as MeetingType,
                                 participants: allRoles.slice(0, 5),
                                 leader: CompanyRole.CEO,
-                                maxTurns: config.meetingMaxTurns,
+                                maxTurns: readConfig().meetingMaxTurns,
                             });
 
+                            const fileManager = await getFileManager();
                             await fileManager.saveMeeting(result);
                             void vscode.window.showInformationMessage(
                                 `Meeting completed: ${result.turns.length} turns, ${result.decisions.length} decisions`
@@ -250,6 +316,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 return;
             }
 
+            const orchestrator = await getOrchestrator();
             const providers = orchestrator.getRegistry().listNames();
             if (providers.length === 0) {
                 void vscode.window.showWarningMessage('No AI providers configured. Add API keys in settings.');
@@ -271,66 +338,50 @@ export function activate(context: vscode.ExtensionContext): void {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('cramEssential.viewDecisions', async () => {
+            const orchestrator = await getOrchestrator();
             const decisions = orchestrator.getDecisions();
             if (decisions.length === 0) {
                 void vscode.window.showInformationMessage('No decisions recorded yet. Start a project or meeting first.');
                 return;
             }
 
+            const fileManager = await getFileManager();
             await fileManager.saveDecisions(decisions);
             void vscode.window.showInformationMessage(
-                `${decisions.length} decisions saved to ${config.outputDir}/decisions/`
+                `${decisions.length} decisions saved to ${readConfig().outputDir}/decisions/`
             );
         })
     );
 
     context.subscriptions.push(
         vscode.commands.registerCommand('cramEssential.exportSession', async () => {
+            const orchestrator = await getOrchestrator();
             const session = orchestrator.getSession();
             if (!session) {
                 void vscode.window.showWarningMessage('No active session to export.');
                 return;
             }
+            const fileManager = await getFileManager();
             await fileManager.saveSession(session);
             void vscode.window.showInformationMessage(
-                `Session exported to ${config.outputDir}/sessions/${session.id}.json`
+                `Session exported to ${readConfig().outputDir}/sessions/${session.id}.json`
             );
         })
     );
 
-    // Watch for config changes - refresh sidebar and reinitialize orchestrator
+    // Watch for config changes - refresh sidebar and reinitialize orchestrator if loaded
     context.subscriptions.push(
         watchConfig((newConfig) => {
-            orchestrator.reinitialize(newConfig);
+            if (_orchestrator) {
+                _orchestrator.reinitialize(newConfig);
+            }
             logger.setLevel(newConfig.logLevel);
             sidebarPanel.refresh();
             logger.info('Configuration reloaded');
         })
     );
 
-    // Persist files on key events
-    orchestrator.onEvent(async (event) => {
-        try {
-            if (event.type === 'meeting:completed') {
-                const result = event.data['result'] as MeetingResult | undefined;
-                if (result) {
-                    await fileManager.saveMeeting(result);
-                }
-            }
-            if (event.type === 'file:generated') {
-                const file = event.data['file'] as GeneratedFile | undefined;
-                if (file) {
-                    await fileManager.saveGeneratedFile(file);
-                }
-            }
-        } catch (err) {
-            logger.error('Failed to save file', err instanceof Error ? err : undefined);
-        }
-    });
-
-    context.subscriptions.push(orchestrator);
     logger.info('CRAM ESSENTIAL activated');
-    logger.show();
 }
 
 /** Deactivate the extension and dispose shared resources. */

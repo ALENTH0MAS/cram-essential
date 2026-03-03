@@ -1,4 +1,4 @@
-﻿import * as vscode from 'vscode';
+import * as vscode from 'vscode';
 import {
     DashboardState,
     ExtensionToWebviewMessage,
@@ -11,7 +11,7 @@ import {
     MeetingAgenda,
     CompanyRole,
 } from '../types';
-import { Orchestrator } from '../orchestrator/Orchestrator';
+import type { Orchestrator } from '../orchestrator/Orchestrator';
 import { handleError } from '../utils/errorHandler';
 import { Logger } from '../utils/logger';
 import { readConfig } from '../utils/configReader';
@@ -21,19 +21,30 @@ import { WelcomePanel } from './WelcomePanel';
  * Sidebar WebView panel with dual-mode rendering:
  * - Onboarding: When no providers are configured, shows setup UI
  * - Dashboard: When providers exist, shows full meeting/pipeline dashboard
+ *
+ * The orchestrator is attached lazily — only when first needed.
  */
 export class SidebarPanel implements vscode.WebviewViewProvider {
     public static readonly viewType = 'cramEssential.sidebar';
     private view?: vscode.WebviewView;
     private readonly logger = Logger.getInstance();
+    private orchestrator?: Orchestrator;
 
     constructor(
         private readonly extensionUri: vscode.Uri,
-        private readonly orchestrator: Orchestrator,
         _context: vscode.ExtensionContext
     ) {
         void _context;
-        this.orchestrator.onEvent((event) => {
+    }
+
+    /** Attach the orchestrator and subscribe to its events. Called once after lazy init. */
+    public attachOrchestrator(orchestrator: Orchestrator): void {
+        if (this.orchestrator) {
+            return;
+        }
+        this.orchestrator = orchestrator;
+
+        orchestrator.onEvent((event) => {
             if (event.type === 'meeting:turn') {
                 const turn = event.data['turn'] as MeetingTurn | undefined;
                 if (turn) {
@@ -103,6 +114,9 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
         try {
             switch (message.type) {
                 case 'startProject': {
+                    if (!this.orchestrator) {
+                        return;
+                    }
                     const msg = message as WebviewToExtensionMessage & {
                         name: string;
                         description: string;
@@ -113,20 +127,28 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'stopProject':
-                    this.orchestrator.stopSession();
+                    this.orchestrator?.stopSession();
                     break;
                 case 'startMeeting':
-                    await this.orchestrator.runMeeting((message as WebviewToExtensionMessage & { agenda: MeetingAgenda }).agenda);
+                    if (this.orchestrator) {
+                        await this.orchestrator.runMeeting((message as WebviewToExtensionMessage & { agenda: MeetingAgenda }).agenda);
+                    }
                     break;
                 case 'changeStrategy':
                     this.logger.info(`Strategy changed to: ${(message as WebviewToExtensionMessage & { strategy: OrchestrationStrategy }).strategy}`);
                     break;
                 case 'assignRole': {
+                    if (!this.orchestrator) {
+                        return;
+                    }
                     const assignMsg = message as WebviewToExtensionMessage & { role: CompanyRole; providerName: string };
                     this.orchestrator.assignRole(assignMsg.role, assignMsg.providerName);
                     break;
                 }
                 case 'sendPrompt': {
+                    if (!this.orchestrator) {
+                        return;
+                    }
                     const promptMsg = message as WebviewToExtensionMessage & { prompt: string };
                     await this.orchestrator.execute({
                         prompt: promptMsg.prompt,
@@ -171,6 +193,17 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
     }
 
     private buildState(): DashboardState {
+        if (!this.orchestrator) {
+            return {
+                session: null,
+                providerStatuses: [],
+                currentStrategy: OrchestrationStrategy.Collaborative,
+                currentStage: null,
+                meetingInProgress: false,
+                recentDecisions: [],
+                activeMeeting: null,
+            };
+        }
         return {
             session: this.orchestrator.getSession(),
             providerStatuses: this.orchestrator.getProviderStatuses(),

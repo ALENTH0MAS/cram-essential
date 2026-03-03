@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 import { BaseProvider } from './BaseProvider';
 import {
     ProviderType,
@@ -13,11 +13,19 @@ import {
 import { ProviderAuthError, ProviderRateLimitError, ProviderError } from '../types/errors';
 
 export class GPTProvider extends BaseProvider {
-    private readonly client: OpenAI;
+    private client: OpenAI | undefined;
 
     constructor(config: ProviderConfig) {
         super('gpt', ProviderType.GPT, config);
-        this.client = new OpenAI({ apiKey: config.apiKey });
+    }
+
+    private async getClient(): Promise<OpenAI> {
+        if (this.client) {
+            return this.client;
+        }
+        const { default: OpenAISDK } = await import('openai');
+        this.client = new OpenAISDK({ apiKey: this.config.apiKey });
+        return this.client;
     }
 
     async sendMessages(
@@ -25,10 +33,11 @@ export class GPTProvider extends BaseProvider {
         systemPrompt?: string
     ): Promise<ProviderResponse> {
         const startTime = Date.now();
+        const client = await this.getClient();
 
         const system = systemPrompt ?? this.getRoleSystemPrompt(CompanyRole.SeniorDeveloper);
 
-        const openaiMessages: OpenAI.ChatCompletionMessageParam[] = [
+        const openaiMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
             { role: 'system', content: system },
             ...messages
                 .filter((m) => m.role !== MessageRole.System)
@@ -39,7 +48,7 @@ export class GPTProvider extends BaseProvider {
         ];
 
         try {
-            const response = await this.client.chat.completions.create({
+            const response = await client.chat.completions.create({
                 model: this.config.model,
                 max_tokens: this.config.maxTokens,
                 messages: openaiMessages,
@@ -62,13 +71,14 @@ export class GPTProvider extends BaseProvider {
         } catch (err: unknown) {
             this.lastError = err instanceof Error ? err.message : String(err);
 
-            if (err instanceof OpenAI.AuthenticationError) {
-                throw new ProviderAuthError(this.name, err.message);
+            const errObj = err as { status?: number };
+            if (errObj.status === 401) {
+                throw new ProviderAuthError(this.name, this.lastError);
             }
-            if (err instanceof OpenAI.RateLimitError) {
-                throw new ProviderRateLimitError(this.name, err.message);
+            if (errObj.status === 429) {
+                throw new ProviderRateLimitError(this.name, this.lastError);
             }
-            throw new ProviderError(this.name, err instanceof Error ? err.message : String(err));
+            throw new ProviderError(this.name, this.lastError);
         }
     }
 
@@ -88,7 +98,8 @@ export class GPTProvider extends BaseProvider {
 
     async healthCheck(): Promise<boolean> {
         try {
-            await this.client.chat.completions.create({
+            const client = await this.getClient();
+            await client.chat.completions.create({
                 model: this.config.model,
                 max_tokens: 10,
                 messages: [{ role: 'user', content: 'ping' }],
@@ -100,7 +111,7 @@ export class GPTProvider extends BaseProvider {
     }
 
     protected extractTokenUsage(rawResponse: unknown): TokenUsage {
-        const resp = rawResponse as OpenAI.ChatCompletion;
+        const resp = rawResponse as { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } };
         return {
             promptTokens: resp.usage?.prompt_tokens ?? 0,
             completionTokens: resp.usage?.completion_tokens ?? 0,

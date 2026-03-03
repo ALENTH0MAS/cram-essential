@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI, GenerativeModel, GenerateContentResult } from '@google/generative-ai';
+import type { GoogleGenerativeAI as GoogleGenerativeAIType } from '@google/generative-ai';
 import { BaseProvider } from './BaseProvider';
 import {
     ProviderType,
@@ -13,11 +13,19 @@ import {
 import { ProviderAuthError, ProviderError } from '../types/errors';
 
 export class GeminiProvider extends BaseProvider {
-    private readonly genAI: GoogleGenerativeAI;
+    private genAI: GoogleGenerativeAIType | undefined;
 
     constructor(config: ProviderConfig) {
         super('gemini', ProviderType.Gemini, config);
-        this.genAI = new GoogleGenerativeAI(config.apiKey);
+    }
+
+    private async getGenAI(): Promise<GoogleGenerativeAIType> {
+        if (this.genAI) {
+            return this.genAI;
+        }
+        const { GoogleGenerativeAI } = await import('@google/generative-ai');
+        this.genAI = new GoogleGenerativeAI(this.config.apiKey);
+        return this.genAI;
     }
 
     async sendMessages(
@@ -25,10 +33,11 @@ export class GeminiProvider extends BaseProvider {
         systemPrompt?: string
     ): Promise<ProviderResponse> {
         const startTime = Date.now();
+        const genAI = await this.getGenAI();
 
         const system = systemPrompt ?? this.getRoleSystemPrompt(CompanyRole.QAEngineer);
 
-        const model: GenerativeModel = this.genAI.getGenerativeModel({
+        const model = genAI.getGenerativeModel({
             model: this.config.model,
             systemInstruction: system,
         });
@@ -53,7 +62,7 @@ export class GeminiProvider extends BaseProvider {
                 },
             });
 
-            const result: GenerateContentResult = await chat.sendMessage(userInput);
+            const result = await chat.sendMessage(userInput);
             const response = result.response;
 
             this.lastUsed = Date.now();
@@ -70,7 +79,7 @@ export class GeminiProvider extends BaseProvider {
         } catch (err: unknown) {
             this.lastError = err instanceof Error ? err.message : String(err);
 
-            const errMsg = err instanceof Error ? err.message : String(err);
+            const errMsg = this.lastError;
             if (errMsg.includes('API_KEY') || errMsg.includes('401') || errMsg.includes('403')) {
                 throw new ProviderAuthError(this.name, errMsg);
             }
@@ -94,7 +103,8 @@ export class GeminiProvider extends BaseProvider {
 
     async healthCheck(): Promise<boolean> {
         try {
-            const model = this.genAI.getGenerativeModel({ model: this.config.model });
+            const genAI = await this.getGenAI();
+            const model = genAI.getGenerativeModel({ model: this.config.model });
             await model.generateContent('ping');
             return true;
         } catch {

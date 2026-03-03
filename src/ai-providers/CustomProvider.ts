@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 import { BaseProvider } from './BaseProvider';
 import {
     ProviderType,
@@ -19,7 +19,8 @@ import { ProviderError } from '../types/errors';
  * Any API that follows the OpenAI chat completions format.
  */
 export class CustomProvider extends BaseProvider {
-    private readonly client: OpenAI;
+    private client: OpenAI | undefined;
+    private readonly customConfig: CustomProviderConfig;
 
     constructor(customConfig: CustomProviderConfig) {
         const providerConfig: ProviderConfig = {
@@ -29,11 +30,19 @@ export class CustomProvider extends BaseProvider {
             timeoutMs: 120000,
         };
         super(customConfig.name, ProviderType.Custom, providerConfig);
+        this.customConfig = customConfig;
+    }
 
-        this.client = new OpenAI({
-            apiKey: customConfig.apiKey || 'not-needed',
-            baseURL: customConfig.baseUrl,
+    private async getClient(): Promise<OpenAI> {
+        if (this.client) {
+            return this.client;
+        }
+        const { default: OpenAISDK } = await import('openai');
+        this.client = new OpenAISDK({
+            apiKey: this.customConfig.apiKey || 'not-needed',
+            baseURL: this.customConfig.baseUrl,
         });
+        return this.client;
     }
 
     async sendMessages(
@@ -41,10 +50,11 @@ export class CustomProvider extends BaseProvider {
         systemPrompt?: string
     ): Promise<ProviderResponse> {
         const startTime = Date.now();
+        const client = await this.getClient();
 
         const system = systemPrompt ?? 'You are a helpful AI assistant working as part of a development team.';
 
-        const openaiMessages: OpenAI.ChatCompletionMessageParam[] = [
+        const openaiMessages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
             { role: 'system', content: system },
             ...messages
                 .filter((m) => m.role !== MessageRole.System)
@@ -55,7 +65,7 @@ export class CustomProvider extends BaseProvider {
         ];
 
         try {
-            const response = await this.client.chat.completions.create({
+            const response = await client.chat.completions.create({
                 model: this.config.model,
                 max_tokens: this.config.maxTokens,
                 messages: openaiMessages,
@@ -91,7 +101,8 @@ export class CustomProvider extends BaseProvider {
 
     async healthCheck(): Promise<boolean> {
         try {
-            await this.client.chat.completions.create({
+            const client = await this.getClient();
+            await client.chat.completions.create({
                 model: this.config.model,
                 max_tokens: 10,
                 messages: [{ role: 'user', content: 'ping' }],
@@ -103,7 +114,7 @@ export class CustomProvider extends BaseProvider {
     }
 
     protected extractTokenUsage(rawResponse: unknown): TokenUsage {
-        const resp = rawResponse as OpenAI.ChatCompletion;
+        const resp = rawResponse as { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } };
         return {
             promptTokens: resp.usage?.prompt_tokens ?? 0,
             completionTokens: resp.usage?.completion_tokens ?? 0,

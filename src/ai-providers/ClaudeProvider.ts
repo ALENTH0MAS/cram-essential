@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import { BaseProvider } from './BaseProvider';
 import {
     ProviderType,
@@ -13,11 +13,19 @@ import {
 import { ProviderAuthError, ProviderRateLimitError, ProviderError } from '../types/errors';
 
 export class ClaudeProvider extends BaseProvider {
-    private readonly client: Anthropic;
+    private client: Anthropic | undefined;
 
     constructor(config: ProviderConfig) {
         super('claude', ProviderType.Claude, config);
-        this.client = new Anthropic({ apiKey: config.apiKey });
+    }
+
+    private async getClient(): Promise<Anthropic> {
+        if (this.client) {
+            return this.client;
+        }
+        const { default: AnthropicSDK } = await import('@anthropic-ai/sdk');
+        this.client = new AnthropicSDK({ apiKey: this.config.apiKey });
+        return this.client;
     }
 
     async sendMessages(
@@ -25,6 +33,7 @@ export class ClaudeProvider extends BaseProvider {
         systemPrompt?: string
     ): Promise<ProviderResponse> {
         const startTime = Date.now();
+        const client = await this.getClient();
 
         const anthropicMessages = messages
             .filter((m) => m.role !== MessageRole.System)
@@ -36,7 +45,7 @@ export class ClaudeProvider extends BaseProvider {
         const system = systemPrompt ?? this.getRoleSystemPrompt(CompanyRole.LeadArchitect);
 
         try {
-            const response = await this.client.messages.create({
+            const response = await client.messages.create({
                 model: this.config.model,
                 max_tokens: this.config.maxTokens,
                 system,
@@ -60,13 +69,14 @@ export class ClaudeProvider extends BaseProvider {
         } catch (err: unknown) {
             this.lastError = err instanceof Error ? err.message : String(err);
 
-            if (err instanceof Anthropic.AuthenticationError) {
-                throw new ProviderAuthError(this.name, err.message);
+            const errObj = err as { status?: number };
+            if (errObj.status === 401) {
+                throw new ProviderAuthError(this.name, this.lastError);
             }
-            if (err instanceof Anthropic.RateLimitError) {
-                throw new ProviderRateLimitError(this.name, err.message);
+            if (errObj.status === 429) {
+                throw new ProviderRateLimitError(this.name, this.lastError);
             }
-            throw new ProviderError(this.name, err instanceof Error ? err.message : String(err));
+            throw new ProviderError(this.name, this.lastError);
         }
     }
 
@@ -87,7 +97,8 @@ export class ClaudeProvider extends BaseProvider {
 
     async healthCheck(): Promise<boolean> {
         try {
-            await this.client.messages.create({
+            const client = await this.getClient();
+            await client.messages.create({
                 model: this.config.model,
                 max_tokens: 10,
                 messages: [{ role: 'user', content: 'ping' }],
@@ -99,7 +110,7 @@ export class ClaudeProvider extends BaseProvider {
     }
 
     protected extractTokenUsage(rawResponse: unknown): TokenUsage {
-        const resp = rawResponse as Anthropic.Message;
+        const resp = rawResponse as { usage: { input_tokens: number; output_tokens: number } };
         return {
             promptTokens: resp.usage.input_tokens,
             completionTokens: resp.usage.output_tokens,
